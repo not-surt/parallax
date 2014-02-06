@@ -78,8 +78,19 @@ function TileSet(object, images) {
   this.tilesHigh = "size" in object && "height" in object.size ? object.size.height : Math.floor(image.height / tileHeight);
   this.originX = "tileorigin" in object && "x" in object.tileorigin ? object.tileorigin.x : 0;
   this.originY = "tileorigin" in object && "y" in object.tileorigin ? object.tileorigin.y : 0;
+  this.sequences = {};
+  if ("sequences" in object) {
+    for (key in object.sequences) {
+      this.sequences[key] = new Sequence(object.sequences[key]);
+    }
+  }
 }
-TileSet.prototype.subImage = function(index) {
+TileSet.prototype.subImage = function(index, tick) {
+  tick = tick !== undefined ? tick : 0;
+  if (index in this.sequences) {
+    var sequence = this.sequences[index];
+    index = index + sequence.frames[sequence.search(tick % sequence.duration)].index;
+  }
   return new SubImage(this.image, (index % this.tilesWide) * this.tileWidth, Math.floor(index / this.tilesWide) * this.tileHeight, this.tileWidth, this.tileHeight, this.originX, this.originY);
 };
 
@@ -239,7 +250,7 @@ TileMapLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
   //console.log(xTiles, yTiles);
   for (var tileY = yTiles.start; tileY < yTiles.end; tileY++) {
     for (var tileX = xTiles.start; tileX < xTiles.end; tileX++) {
-      var subImage = this.tileSet.subImage(this.tileMap.address(tileX, tileY));
+      var subImage = this.tileSet.subImage(this.tileMap.address(tileX, tileY), tick);
       subImage.draw(context, offsetX + tileX * this.tileSet.tileWidth + this.tileSet.originX, offsetY + tileY * this.tileSet.tileHeight + this.tileSet.originY);
     }
   }
