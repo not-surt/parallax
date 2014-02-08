@@ -7,7 +7,7 @@
 var scene = {
   framerate:60,
   viewport: {
-    width:640,
+    width:320,
     height:240,
     zoom:2,
   },

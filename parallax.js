@@ -46,8 +46,7 @@ function preloadImages(images, callback) {
   }
 }
 
-function SubImage(image, x, y, width, height, originX, originY) {
-  this.image = image;
+function Region(x, y, width, height, originX, originY) {
   this.x = x;
   this.y = y;
   this.width = width;
@@ -55,15 +54,35 @@ function SubImage(image, x, y, width, height, originX, originY) {
   this.originX = defaultTo(originX, 0);
   this.originY = defaultTo(originY, 0);
 }
+
+function SubImage(image, x, y, width, height, originX, originY) {
+  Region.call(this, x, y, width, height, originX, originY);
+  this.image = image;
+}
+SubImage.prototype = Object.create(Region.prototype);
 SubImage.prototype.draw = function(context, x, y) {
   context.drawImage(this.image, this.x, this.y, this.width, this.height, x - this.originX, y - this.originY, this.width, this.height);
 };
 
-function SpriteSet(object) {
+function Sprite(object) {
+  var x = "position" in object && "x" in object.position ? object.position.x : 0;
+  var y = "position" in object && "y" in object.position ? object.position.y : 0;
+  var width = "size" in object && "width" in object.position ? object.size.width : 0;
+  var height = "size" in object && "height" in object.position ? object.size.height : 0;
+  var originX = "origin" in object && "x" in object.origin ? object.origin.x : 0;
+  var originY = "origin" in object && "y" in object.origin ? object.origin.y : 0;
+  Region.call(this, x, y, width, height, originX, originY);
+}
+Sprite.prototype = Object.create(Region.prototype);
+
+function SpriteSet(object, images) {
+  this.image = "image" in object ? images[object.image] : null;
   var sprites = "sprites" in object ? object.tiles : null;
   this.sprites = [];
-  for (var i = 0; i < sprites.length; i++) {
-    this.sprites[i] = new SubImage();
+  if ("sprites" in object) {
+    for (var i = 0; i < object.sprites.length; i++) {
+      this.sprites[i] = new Sprite(object.sprites[i]);
+    }
   }
 }
 SpriteSet.prototype.subImage = function(index) {
@@ -148,6 +167,9 @@ function Layer(object) {
   this.wrapX = "wrap" in object && "horizontal" in object.wrap ? object.wrap.horizontal : false;
   this.wrapY = "wrap" in object && "vertical" in object.wrap ? object.wrap.vertical : false;
 }
+Layer.prototype.bounds = function() {
+  return {x: this.x - this.originX, y:this.y - this.originY, width:0, height:0};
+};
 Layer.prototype.draw = function(canvas, context, tick) {
   var bounds = this.bounds();
   var offsetX = Math.round(tick * this.stepX);
@@ -155,24 +177,21 @@ Layer.prototype.draw = function(canvas, context, tick) {
   var xSpans = {start:0, end:1};
   var ySpans = {start:0, end:1};
   if (this.wrapX) {
-    xSpans.start = Math.floor((bounds.x - offsetX) / bounds.width);
-    xSpans.end = Math.ceil((bounds.x + canvas.width - offsetX) / bounds.width);
+    xSpans.start = Math.floor((-bounds.x  - offsetX) / bounds.width);
+    xSpans.end = Math.ceil((-bounds.x + canvas.width - offsetX) / bounds.width);
   }
   if (this.wrapY) {
-    ySpans.start = Math.floor((bounds.y - offsetY) / bounds.height);
-    ySpans.end = Math.ceil((bounds.y + canvas.height - offsetY) / bounds.height);
+    ySpans.start = Math.floor((-bounds.y - offsetY) / bounds.height);
+    ySpans.end = Math.ceil((-bounds.y + canvas.height - offsetY) / bounds.height);
   }
-  //if (this instanceof TileMapLayer) {
-    //console.log(bounds, xSpans, ySpans);//////////////////////
-  //}
+  console.log(xSpans, ySpans);
   for (var ySpan = ySpans.start; ySpan < ySpans.end; ySpan++) {
     for (var xSpan = xSpans.start; xSpan < xSpans.end; xSpan++) {
       this.drawSpan(canvas, context, tick, offsetX + xSpan * bounds.width, offsetY + ySpan * bounds.height);
+      //context.fillStyle="#0000FF";
+      //context.strokeRect(bounds.x + xSpan * bounds.width + offsetX, bounds.y + ySpan * bounds.height + offsetY, bounds.width, bounds.height);
     }
   }
-};
-Layer.prototype.bounds = function() {
-  return {x: this.x - this.originX, y:this.y - this.originY, width:0, height:0};
 };
 
 function ImageLayer(object, images) {
@@ -218,7 +237,7 @@ TileLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
     subImage = this.tileSet.subImage(this.index);
   }
   if (subImage !== null) {
-    subImage.draw(context, this.x + x, this.y + y);
+    subImage.draw(context, this.x + -this.originX + x, this.y + -this.originY + y);
   }
 };
 
@@ -230,34 +249,38 @@ function TileMapLayer(object, tileSets, tileMaps) {
 TileMapLayer.prototype = Object.create(Layer.prototype);
 TileMapLayer.prototype.bounds = function() {
   var bounds = Layer.prototype.bounds.call(this);
+  bounds.x -= this.tileSet.originX;
+  bounds.y -= this.tileSet.originY;
   bounds.width = this.tileMap.width * this.tileSet.tileWidth;
   bounds.height = this.tileMap.height * this.tileSet.tileHeight;
+  console.log(bounds);
   return bounds;
 };
 TileMapLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
-  var offsetX = Math.round(this.x + x + -this.tileSet.originX);
-  var offsetY = Math.round(this.y + y + -this.tileSet.originY);
+  var offsetX = Math.round(this.x + x + -this.originX);
+  var offsetY = Math.round(this.y + y + -this.originY);
 
   var xTiles = {
-    start:Math.max(0, Math.floor(-offsetX / this.tileSet.tileWidth)),
+    start:Math.max(0, Math.floor((-offsetX) / this.tileSet.tileWidth)),
     end:Math.min(Math.ceil((-offsetX + canvas.width) / this.tileSet.tileWidth), this.tileMap.width)
   };
   var yTiles = {
-    start:Math.max(0, Math.floor(-offsetY / this.tileSet.tileHeight)),
+    start:Math.max(0, Math.floor((-offsetY) / this.tileSet.tileHeight)),
     end:Math.min(Math.ceil((-offsetY + canvas.height) / this.tileSet.tileHeight), this.tileMap.height)
   };
-
-  //console.log(xTiles, yTiles);
   for (var tileY = yTiles.start; tileY < yTiles.end; tileY++) {
     for (var tileX = xTiles.start; tileX < xTiles.end; tileX++) {
       var subImage = this.tileSet.subImage(this.tileMap.address(tileX, tileY), tick);
-      subImage.draw(context, offsetX + tileX * this.tileSet.tileWidth + this.tileSet.originX, offsetY + tileY * this.tileSet.tileHeight + this.tileSet.originY);
+      subImage.draw(context,
+        offsetX + tileX * this.tileSet.tileWidth,
+        offsetY + tileY * this.tileSet.tileHeight);
     }
   }
 };
 
 function Parallax() {
   this.images = {};
+  this.spriteSets = {};
   this.tileSets = {};
   this.tileMaps = {};
   this.layers = [];
@@ -308,6 +331,20 @@ Parallax.prototype.load = function(stage, scene, callback) {
     } break;
 
     case 1: { // process scene
+      // process spritesets
+      if ("spritesets" in scene) {
+        for (var i = 0; i < scene.spritesets.length; i++) {
+          var sceneSpriteSet = scene.spritesets[i];
+          var spriteSet = new SpriteSet(sceneSpriteSet, this.images);
+          // assign aliases
+          // image id
+          if ("id" in sceneSpriteSet && !(sceneSpriteSet.id in this.spriteSets)) {
+            this.spriteSets[sceneSpriteSet.id] = spriteSet;
+          }
+          // tileset list index
+          this.spriteSets[i] = spriteSet;
+        }
+      }
       // process tilesets
       if ("tilesets" in scene) {
         for (var i = 0; i < scene.tilesets.length; i++) {
