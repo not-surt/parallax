@@ -8,10 +8,6 @@ function isNumber(n) {
   return !isNaN(parseFloat(n)) && isFinite(n);
 }
 
-function defaultTo(variable, defaultValue) {
-  return (variable === undefined) ? defaultValue : variable;
-}
-
 function binarySearch(array, key, comparator) {
   var start = 0;
   var end = array.length - 1;
@@ -46,13 +42,37 @@ function preloadImages(images, callback) {
   }
 }
 
+function Sequence(array) {
+  this.frames = [];
+  this.duration = 0;
+
+  var lastEnd = 0;
+  for (var i = 0; i < array.length; i++) {
+    var start = this.duration;
+    this.duration += array[i][1];
+    var end = this.duration;
+    this.frames.push(new Sequence.Frame(array[i][0], start, end));
+  }
+}
+Sequence.Frame = function(index, start, end) {
+  this.index = index;
+  this.start = start;
+  this.end = end;
+};
+Sequence.comparator = function(tick, frame) {
+  return (tick < frame.start) ? -1 : (tick >= frame.end) ? 1 : 0;
+}
+Sequence.prototype.search = function(tick) {
+  return binarySearch(this.frames, tick, Sequence.comparator);
+}
+
 function Region(x, y, width, height, originX, originY) {
   this.x = x;
   this.y = y;
   this.width = width;
   this.height = height;
-  this.originX = defaultTo(originX, 0);
-  this.originY = defaultTo(originY, 0);
+  this.originX = (originX === undefined) ? 0 : originX;
+  this.originY = (originY === undefined) ? 0 : originY;
 }
 
 function SubImage(image, x, y, width, height, originX, originY) {
@@ -75,21 +95,47 @@ function Sprite(object) {
 }
 Sprite.prototype = Object.create(Region.prototype);
 
-function SpriteSet(object, images) {
+function SpriteSheet(object, images) {
   this.image = "image" in object ? images[object.image] : null;
   var sprites = "sprites" in object ? object.tiles : null;
   this.sprites = [];
+  this.sequences = {};
   if ("sprites" in object) {
     for (var i = 0; i < object.sprites.length; i++) {
-      this.sprites[i] = new Sprite(object.sprites[i]);
+      this.sprites.push(new Sprite(object.sprites[i]));
+    }
+  }
+  if ("sequences" in object) {
+    for (key in object.sequences) {
+      this.sequences[key] = new Sequence(object.sequences[key]);
     }
   }
 }
-SpriteSet.prototype.subImage = function(index) {
+SpriteSheet.prototype.subImage = function(index) {
   return this.sprites[index];
 };
 
-function TileSet(object, images) {
+function SpriteObject(object) {
+  this.index = "index" in object ? object.index : null;
+  this.sequence = "sequence" in object ? object.sequence : null;
+  this.width = "size" in object && "width" in object.size ? object.size.width : 0;
+  this.height = "size" in object && "height" in object.size ? object.size.height : 0;
+}
+
+function SpriteMap(object) {
+  this.width = "size" in object && "width" in object.size ? object.size.width : 0;
+  this.height = "size" in object && "height" in object.size ? object.size.height : 0;
+  this.sprites = [];
+  var sprites = "sprites" in object ? object.sprites : null;
+  if (sprites !== null) {
+    for (var i = 0; i < sprites.length; i++) {
+      this.sprites.push(new SpriteObject(sprites[i]));
+    }
+  }
+  console.log(this);
+}
+
+function TileSheet(object, images) {
   this.image = "image" in object ? images[object.image] : null;
   this.tileWidth = "tilesize" in object && "width" in object.tilesize ? object.tilesize.width : 0;
   this.tileHeight = "tilesize" in object && "height" in object.tilesize ? object.tilesize.height : 0;
@@ -104,7 +150,7 @@ function TileSet(object, images) {
     }
   }
 }
-TileSet.prototype.subImage = function(index, tick) {
+TileSheet.prototype.subImage = function(index, tick) {
   tick = tick !== undefined ? tick : 0;
   if (index in this.sequences) {
     var sequence = this.sequences[index];
@@ -131,31 +177,6 @@ TileMap.prototype.address = function(x, y) {
   }
   return this.tiles[y * this.width + x];
 };
-
-function Frame(index, start, end) {
-  this.index = index;
-  this.start = start;
-  this.end = end;
-}
-
-function Sequence(array) {
-  this.frames = [];
-  this.duration = 0;
-
-  var lastEnd = 0;
-  for (var i = 0; i < array.length; i++) {
-    var start = this.duration;
-    this.duration += array[i][1];
-    var end = this.duration;
-    this.frames.push(new Frame(array[i][0], start, end));
-  }
-}
-Sequence.comparator = function(tick, frame) {
-  return (tick < frame.start) ? -1 : (tick >= frame.end) ? 1 : 0;
-}
-Sequence.prototype.search = function(tick) {
-  return binarySearch(this.frames, tick, Sequence.comparator);
-}
 
 function Layer(object) {
   this.x = "position" in object && "x" in object.position ? object.position.x : 0;
@@ -184,7 +205,6 @@ Layer.prototype.draw = function(canvas, context, tick) {
     ySpans.start = Math.floor((-bounds.y - offsetY) / bounds.height);
     ySpans.end = Math.ceil((-bounds.y + canvas.height - offsetY) / bounds.height);
   }
-  console.log(xSpans, ySpans);
   for (var ySpan = ySpans.start; ySpan < ySpans.end; ySpan++) {
     for (var xSpan = xSpans.start; xSpan < xSpans.end; xSpan++) {
       this.drawSpan(canvas, context, tick, offsetX + xSpan * bounds.width, offsetY + ySpan * bounds.height);
@@ -210,50 +230,49 @@ ImageLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
   subImage.draw(context, this.x + x, this.y + y);
 };
 
-function TileLayer(object, tileSets) {
+function TileLayer(object, tileSheets) {
   Layer.call(this, object);
-  this.tileSet = "tileset" in object ? tileSets[object.tileset] : null;
+  this.tileSheet = "tileset" in object ? tileSheets[object.tileset] : null;
   this.index = "index" in object ? new sceneLayer.index : 0;
   this.sequence = "sequence" in object ? new Sequence(object.sequence) : null;
 }
 TileLayer.prototype = Object.create(Layer.prototype);
 TileLayer.prototype.bounds = function() {
   var bounds = Layer.prototype.bounds.call(this);
-  bounds.x -= this.tileSet.originX;
-  bounds.y -= this.tileSet.originY;
-  bounds.width = this.tileSet.tileWidth;
-  bounds.height = this.tileSet.tileHeight;
+  bounds.x -= this.tileSheet.originX;
+  bounds.y -= this.tileSheet.originY;
+  bounds.width = this.tileSheet.tileWidth;
+  bounds.height = this.tileSheet.tileHeight;
   return bounds;
 };
 TileLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
   var subImage = null;
   if (this.sequence !== null) {
     var frameNumber = this.sequence.frames[this.sequence.search(tick % this.sequence.duration)].index;
-    if (frameNumber !== null && this.tileSet !== null) {
-      subImage = this.tileSet.subImage(frameNumber);
+    if (frameNumber !== null && this.tileSheet !== null) {
+      subImage = this.tileSheet.subImage(frameNumber);
     }
   }
   else {
-    subImage = this.tileSet.subImage(this.index);
+    subImage = this.tileSheet.subImage(this.index);
   }
   if (subImage !== null) {
     subImage.draw(context, this.x + -this.originX + x, this.y + -this.originY + y);
   }
 };
 
-function TileMapLayer(object, tileSets, tileMaps) {
+function TileMapLayer(object, tileSheets, tileMaps) {
   Layer.call(this, object);
-  this.tileSet = "tileset" in object ? tileSets[object.tileset] : null;
+  this.tileSheet = "tileset" in object ? tileSheets[object.tileset] : null;
   this.tileMap = "tilemap" in object ? tileMaps[object.tilemap] : null;
 }
 TileMapLayer.prototype = Object.create(Layer.prototype);
 TileMapLayer.prototype.bounds = function() {
   var bounds = Layer.prototype.bounds.call(this);
-  bounds.x -= this.tileSet.originX;
-  bounds.y -= this.tileSet.originY;
-  bounds.width = this.tileMap.width * this.tileSet.tileWidth;
-  bounds.height = this.tileMap.height * this.tileSet.tileHeight;
-  console.log(bounds);
+  bounds.x -= this.tileSheet.originX;
+  bounds.y -= this.tileSheet.originY;
+  bounds.width = this.tileMap.width * this.tileSheet.tileWidth;
+  bounds.height = this.tileMap.height * this.tileSheet.tileHeight;
   return bounds;
 };
 TileMapLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
@@ -261,27 +280,28 @@ TileMapLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
   var offsetY = Math.round(this.y + y + -this.originY);
 
   var xTiles = {
-    start:Math.max(0, Math.floor((-offsetX) / this.tileSet.tileWidth)),
-    end:Math.min(Math.ceil((-offsetX + canvas.width) / this.tileSet.tileWidth), this.tileMap.width)
+    start:Math.max(0, Math.floor((-offsetX) / this.tileSheet.tileWidth)),
+    end:Math.min(Math.ceil((-offsetX + canvas.width) / this.tileSheet.tileWidth), this.tileMap.width)
   };
   var yTiles = {
-    start:Math.max(0, Math.floor((-offsetY) / this.tileSet.tileHeight)),
-    end:Math.min(Math.ceil((-offsetY + canvas.height) / this.tileSet.tileHeight), this.tileMap.height)
+    start:Math.max(0, Math.floor((-offsetY) / this.tileSheet.tileHeight)),
+    end:Math.min(Math.ceil((-offsetY + canvas.height) / this.tileSheet.tileHeight), this.tileMap.height)
   };
   for (var tileY = yTiles.start; tileY < yTiles.end; tileY++) {
     for (var tileX = xTiles.start; tileX < xTiles.end; tileX++) {
-      var subImage = this.tileSet.subImage(this.tileMap.address(tileX, tileY), tick);
+      var subImage = this.tileSheet.subImage(this.tileMap.address(tileX, tileY), tick);
       subImage.draw(context,
-        offsetX + tileX * this.tileSet.tileWidth,
-        offsetY + tileY * this.tileSet.tileHeight);
+        offsetX + tileX * this.tileSheet.tileWidth,
+        offsetY + tileY * this.tileSheet.tileHeight);
     }
   }
 };
 
 function Parallax() {
   this.images = {};
-  this.spriteSets = {};
-  this.tileSets = {};
+  this.spriteSheets = {};
+  this.spriteMaps = {};
+  this.tileSheets = {};
   this.tileMaps = {};
   this.layers = [];
 }
@@ -291,29 +311,20 @@ Parallax.prototype.load = function(stage, scene, callback) {
       var toLoad = {};
       // image list images
       if ("images" in scene) {
-        for (var i = 0; i < scene.images.length; i++) {
-          var image = scene.images[i];
+        for (var key in scene.images) {
+          var image = scene.images[key];
           // allocate image
-          if (!(image.image in this.images)) {
-            this.images[image.image] = new Image();
-            toLoad[image.image] = this.images[image.image];
+          if (!(image in this.images)) {
+            toLoad[image] = this.images[image] = new Image();
           }
-          // assign aliases
-          // image id
-          if ("id" in image && !(image.id in this.images)) {
-            this.images[image.id] = this.images[image.image];
-          }
-          // image list index
-          this.images[i] = this.images[image.image];
+          this.images[key] = this.images[image];
         }
       }
       // tileset images
-      if ("tilesets" in scene) {
-        for (var i = 0; i < scene.tilesets.length; i++) {
-          var sceneTileset = scene.tilesets[i];
-          if (!(sceneTileset.image in this.images)) {
-            this.images[sceneTileset.image] = new Image();
-            toLoad[sceneTileset.image] = this.images[sceneTileset.image];
+      if ("tilesheets" in scene) {
+        for (var key in scene.tilesheets) {
+          if (!(key in this.images)) {
+            toLoad[key] = this.images[key] = new Image();
           }
         }
       }
@@ -331,46 +342,28 @@ Parallax.prototype.load = function(stage, scene, callback) {
     } break;
 
     case 1: { // process scene
-      // process spritesets
-      if ("spritesets" in scene) {
-        for (var i = 0; i < scene.spritesets.length; i++) {
-          var sceneSpriteSet = scene.spritesets[i];
-          var spriteSet = new SpriteSet(sceneSpriteSet, this.images);
-          // assign aliases
-          // image id
-          if ("id" in sceneSpriteSet && !(sceneSpriteSet.id in this.spriteSets)) {
-            this.spriteSets[sceneSpriteSet.id] = spriteSet;
-          }
-          // tileset list index
-          this.spriteSets[i] = spriteSet;
+      // process spritesheet
+      if ("spritesheets" in scene) {
+        for (var key in scene.spritesheets) {
+          this.spriteSheets[i] = new SpriteSheet(scene.spritesheets[key], this.images);
         }
       }
-      // process tilesets
-      if ("tilesets" in scene) {
-        for (var i = 0; i < scene.tilesets.length; i++) {
-          var sceneTileSet = scene.tilesets[i];
-          var tileSet = new TileSet(sceneTileSet, this.images);
-          // assign aliases
-          // image id
-          if ("id" in sceneTileSet && !(sceneTileSet.id in this.tileSets)) {
-            this.tileSets[sceneTileSet.id] = tileSet;
-          }
-          // tileset list index
-          this.tileSets[i] = tileSet;
+      // process spritemaps
+      if ("spritemaps" in scene) {
+        for (var key in scene.spritemaps) {
+          this.spriteMaps[key] = new SpriteMap(scene.spritemaps[key]);
+        }
+      }
+      // process tilesheets
+      if ("tilesheets" in scene) {
+        for (var key in scene.tilesheets) {
+          this.tileSheets[key] = new TileSheet(scene.tilesheets[key], this.images);
         }
       }
       // process tilemaps
       if ("tilemaps" in scene) {
-        for (var i = 0; i < scene.tilemaps.length; i++) {
-          var sceneTileMap = scene.tilemaps[i];
-          var tileMap = new TileMap(sceneTileMap);
-          // assign aliases
-          // image id
-          if ("id" in sceneTileMap && !(sceneTileMap.id in this.tileMaps)) {
-            this.tileMaps[sceneTileMap.id] = tileMap;
-          }
-          // tilemap list index
-          this.tileMaps[i] = tileMap;
+        for (var key in scene.tilemaps) {
+          this.tileMaps[key] = new TileMap(scene.tilemaps[key]);
         }
       }
       // process layers
@@ -383,10 +376,10 @@ Parallax.prototype.load = function(stage, scene, callback) {
               layer = new ImageLayer(sceneLayer, this.images);
             } break;
             case "tile": {
-              layer = new TileLayer(sceneLayer, this.tileSets);
+              layer = new TileLayer(sceneLayer, this.tileSheets);
             } break;
             case "tilemap": {
-              layer = new TileMapLayer(sceneLayer, this.tileSets, this.tileMaps);
+              layer = new TileMapLayer(sceneLayer, this.tileSheets, this.tileMaps);
             } break;
           }
           this.layers.push(layer);
