@@ -10,16 +10,6 @@
   <meta charset="utf-8">
   <script type="application/javascript" src="scene.js"></script>
   <script type="application/javascript" src="parallax.js"></script>
-  <script type="application/javascript">
-    function main() {
-      var canvas = document.getElementById("canvas");
-      (new Parallax()).show(scene, canvas);
-
-      //scene.viewport.zoom = 0.5;
-      //var canvas2 = document.getElementById("canvas2");
-      //(new Parallax()).show(scene, canvas2);
-    }
-  </script>
   <style type="text/css">
     canvas {
       image-rendering: crisp-edges;
@@ -30,8 +20,7 @@
     }
   </style>
  </head>
- <body onload="main();">
-   <canvas id="canvas"></canvas><br/>
-   <canvas id="canvas2"></canvas><br/>
+ <body onload="(new Parallax()).show(scene, document.getElementById('canvas'));">
+   <canvas id="canvas"></canvas>
  </body>
 </html>

@@ -63,8 +63,17 @@ Sequence.comparator = function(tick, frame) {
   return (tick < frame.start) ? -1 : (tick >= frame.end) ? 1 : 0;
 }
 Sequence.prototype.search = function(tick) {
-  return binarySearch(this.frames, tick, Sequence.comparator);
+  return binarySearch(this.frames, tick % this.duration, Sequence.comparator);
 }
+
+function MotionSequence(array) {
+  MotionSequence.call(this, array);
+}
+MotionSequence.prototype = Object.create(Sequence.prototype);
+MotionSequence.Frame = function(index, start, end) {
+  MotionSequence.Frame.call(this, index, start, end);
+};
+MotionSequence.Frame.prototype = Object.create(Sequence.Frame.prototype);
 
 function Region(x, y, width, height, originX, originY) {
   this.x = x;
@@ -87,8 +96,8 @@ SubImage.prototype.draw = function(context, x, y) {
 function Sprite(object) {
   var x = "position" in object && "x" in object.position ? object.position.x : 0;
   var y = "position" in object && "y" in object.position ? object.position.y : 0;
-  var width = "size" in object && "width" in object.position ? object.size.width : 0;
-  var height = "size" in object && "height" in object.position ? object.size.height : 0;
+  var width = "size" in object && "width" in object.size ? object.size.width : 0;
+  var height = "size" in object && "height" in object.size ? object.size.height : 0;
   var originX = "origin" in object && "x" in object.origin ? object.origin.x : 0;
   var originY = "origin" in object && "y" in object.origin ? object.origin.y : 0;
   Region.call(this, x, y, width, height, originX, originY);
@@ -112,15 +121,9 @@ function SpriteSheet(object, images) {
   }
 }
 SpriteSheet.prototype.subImage = function(index) {
-  return this.sprites[index];
+  var sprite = this.sprites[index];
+  return new SubImage(this.image, sprite.x, sprite.y, sprite.width, sprite.height, sprite.originX, sprite.originY);
 };
-
-function SpriteObject(object) {
-  this.index = "index" in object ? object.index : null;
-  this.sequence = "sequence" in object ? object.sequence : null;
-  this.width = "size" in object && "width" in object.size ? object.size.width : 0;
-  this.height = "size" in object && "height" in object.size ? object.size.height : 0;
-}
 
 function SpriteMap(object) {
   this.width = "size" in object && "width" in object.size ? object.size.width : 0;
@@ -129,10 +132,15 @@ function SpriteMap(object) {
   var sprites = "sprites" in object ? object.sprites : null;
   if (sprites !== null) {
     for (var i = 0; i < sprites.length; i++) {
-      this.sprites.push(new SpriteObject(sprites[i]));
+      this.sprites.push(new SpriteMap.Sprite(sprites[i]));
     }
   }
-  console.log(this);
+}
+SpriteMap.Sprite = function(object) {
+  this.index = "index" in object ? object.index : null;
+  this.sequence = "sequence" in object ? object.sequence : null;
+  this.x = "position" in object && "x" in object.position ? object.position.x : 0;
+  this.y = "position" in object && "y" in object.position ? object.position.y : 0;
 }
 
 function TileSheet(object, images) {
@@ -154,7 +162,7 @@ TileSheet.prototype.subImage = function(index, tick) {
   tick = tick !== undefined ? tick : 0;
   if (index in this.sequences) {
     var sequence = this.sequences[index];
-    index = index + sequence.frames[sequence.search(tick % sequence.duration)].index;
+    index = index + sequence.frames[sequence.search(tick)].index;
   }
   return new SubImage(this.image, (index % this.tilesWide) * this.tileWidth, Math.floor(index / this.tilesWide) * this.tileHeight, this.tileWidth, this.tileHeight, this.originX, this.originY);
 };
@@ -230,40 +238,39 @@ ImageLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
   subImage.draw(context, this.x + x, this.y + y);
 };
 
-function TileLayer(object, tileSheets) {
+function SpriteMapLayer(object, spriteSheets, spriteMaps) {
   Layer.call(this, object);
-  this.tileSheet = "tileset" in object ? tileSheets[object.tileset] : null;
-  this.index = "index" in object ? new sceneLayer.index : 0;
-  this.sequence = "sequence" in object ? new Sequence(object.sequence) : null;
+  this.spriteSheet = "spritesheet" in object ? spriteSheets[object.spritesheet] : null;
+  this.spriteMap = "spritemap" in object ? spriteMaps[object.spritemap] : null;
 }
-TileLayer.prototype = Object.create(Layer.prototype);
-TileLayer.prototype.bounds = function() {
+SpriteMapLayer.prototype = Object.create(Layer.prototype);
+SpriteMapLayer.prototype.bounds = function() {
   var bounds = Layer.prototype.bounds.call(this);
-  bounds.x -= this.tileSheet.originX;
-  bounds.y -= this.tileSheet.originY;
-  bounds.width = this.tileSheet.tileWidth;
-  bounds.height = this.tileSheet.tileHeight;
+  bounds.width = this.spriteMap.width;
+  bounds.height = this.spriteMap.height;
   return bounds;
 };
-TileLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
-  var subImage = null;
-  if (this.sequence !== null) {
-    var frameNumber = this.sequence.frames[this.sequence.search(tick % this.sequence.duration)].index;
-    if (frameNumber !== null && this.tileSheet !== null) {
-      subImage = this.tileSheet.subImage(frameNumber);
+SpriteMapLayer.prototype.drawSpan = function(canvas, context, tick, x, y) {
+  for (var i = 0; i < this.spriteMap.sprites.length; i++) {
+    var sprite = this.spriteMap.sprites[i];
+    var offsetX = Math.round(this.x + x + sprite.x);
+    var offsetY = Math.round(this.y + y + sprite.y);
+    var frameNumber = (sprite.index === null) ? 0 : sprite.index;
+    if (sprite.sequence !== null) {
+      var sequence = this.spriteSheet.sequences[sprite.sequence];
+      var sequenceFrame = sequence.frames[sequence.search(tick)].index;
+      if (sequenceFrame !== null) {
+        frameNumber += sequenceFrame;
+      }
     }
-  }
-  else {
-    subImage = this.tileSheet.subImage(this.index);
-  }
-  if (subImage !== null) {
-    subImage.draw(context, this.x + -this.originX + x, this.y + -this.originY + y);
+    var subImage = this.spriteSheet.subImage(frameNumber);
+    subImage.draw(context, offsetX, offsetY);
   }
 };
 
 function TileMapLayer(object, tileSheets, tileMaps) {
   Layer.call(this, object);
-  this.tileSheet = "tileset" in object ? tileSheets[object.tileset] : null;
+  this.tileSheet = "tilesheet" in object ? tileSheets[object.tilesheet] : null;
   this.tileMap = "tilemap" in object ? tileMaps[object.tilemap] : null;
 }
 TileMapLayer.prototype = Object.create(Layer.prototype);
@@ -320,7 +327,15 @@ Parallax.prototype.load = function(stage, scene, callback) {
           this.images[key] = this.images[image];
         }
       }
-      // tileset images
+      // spritesheet images
+      if ("spritesheets" in scene) {
+        for (var key in scene.spritesheets) {
+          if (!(key in this.images)) {
+            toLoad[key] = this.images[key] = new Image();
+          }
+        }
+      }
+      // tilesheet images
       if ("tilesheets" in scene) {
         for (var key in scene.tilesheets) {
           if (!(key in this.images)) {
@@ -345,7 +360,7 @@ Parallax.prototype.load = function(stage, scene, callback) {
       // process spritesheet
       if ("spritesheets" in scene) {
         for (var key in scene.spritesheets) {
-          this.spriteSheets[i] = new SpriteSheet(scene.spritesheets[key], this.images);
+          this.spriteSheets[key] = new SpriteSheet(scene.spritesheets[key], this.images);
         }
       }
       // process spritemaps
@@ -375,8 +390,8 @@ Parallax.prototype.load = function(stage, scene, callback) {
             case "image": {
               layer = new ImageLayer(sceneLayer, this.images);
             } break;
-            case "tile": {
-              layer = new TileLayer(sceneLayer, this.tileSheets);
+            case "spritemap": {
+              layer = new SpriteMapLayer(sceneLayer, this.spriteSheets, this.spriteMaps);
             } break;
             case "tilemap": {
               layer = new TileMapLayer(sceneLayer, this.tileSheets, this.tileMaps);
